@@ -1,4 +1,4 @@
-package rcon
+package state
 
 import (
 	"sort"
@@ -29,6 +29,8 @@ type Player struct {
 
 	// ID of the player
 	ID int
+
+	Score int
 
 	// Team the player is on (GDI or NOD)
 	Team games.Team
