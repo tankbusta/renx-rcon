@@ -2,19 +2,18 @@ package rcon
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
+	"github.com/tankbusta/renx-rcon/commands"
 	"github.com/tankbusta/renx-rcon/state"
 )
 
-const (
-	playerStateMsg = "cClientVarList NAME ID IP HWID PING TEAM STEAM ADMIN SCORE CREDITS CHARACTER\n"
-	botStateMsg    = "cBotVarList ID NAME TEAM SCORE CREDITS CHARACTER\n"
-)
+var cmdUpdateBotState = commands.NewListBotsCommand()
 
 type IServer interface {
-	WriteMsg(msg string)
+	WriteMsg(msg commands.ICommand, cb commands.HandleCommandResp)
 	Ready() bool
 }
 
@@ -43,10 +42,21 @@ func NewGameState(parent IServer) *GameStateManager {
 	return gsm
 }
 
+func (s *GameStateManager) onBotStateUpdate(cmd commands.ICommand, data string) {
+	var p state.Player
+
+	if err := cmd.UnmarshalRCON(data, &p); err != nil {
+		log.Printf("[ !! ] Failed to unmarshal bot state: %s", err)
+		return
+	}
+
+	log.Println("[ !! ] Received bot state update")
+	fmt.Println(p)
+}
+
 // dispatchStateCheck sends several messages to the server to verify the game state matches
 func (s *GameStateManager) dispatchStateCheck() error {
-	// s.parent.WriteMsg(playerStateMsg)
-	s.parent.WriteMsg(botStateMsg)
+	s.parent.WriteMsg(cmdUpdateBotState, s.onBotStateUpdate)
 
 	s.LastUpdated = time.Now()
 	return nil
@@ -63,6 +73,9 @@ StateLoop:
 			break StateLoop
 		case <-ticker.C:
 			log.Println("[ !! ] Dispatching state check")
+
+			// We need to send a message to RCON at least once every 60 seconds otherwise the game server will disconnect us
+			// So let's take this opportunity to update our state!
 			if s.parent.Ready() {
 				s.dispatchStateCheck()
 			}

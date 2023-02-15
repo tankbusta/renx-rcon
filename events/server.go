@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Version struct {
@@ -17,7 +18,7 @@ func (s Version) String() string {
 }
 
 func (s *Version) Parse(input string) error {
-	parts := strings.SplitN(input, Delimiter, 3)
+	parts := strings.SplitN(input, string(Delimiter), 3)
 	if len(parts) != 3 {
 		return fmt.Errorf("Unknown RCON version format: %s", input)
 	}
@@ -33,8 +34,9 @@ func (s *Version) Parse(input string) error {
 	if err != nil {
 		return fmt.Errorf("Unknown Game version `%s`: %w", parts[1], err)
 	}
+
 	s.GameVersion = gv
-	s.GameVersionPretty = parts[2]
+	s.GameVersionPretty = strings.Trim(parts[2], "\n")
 
 	return nil
 }
@@ -55,3 +57,40 @@ func (s *ServerError) Parse(input string) error {
 	s.ErrorMsg = input
 	return nil
 }
+
+type (
+	ServerInfo struct {
+		Port             int    `rcon:"PORT"`
+		Name             string `rcon:"SERVERNAME"`
+		Map              string `rcon:"GETPACKAGENAME"`
+		NumPlayers       int    `rcon:"NUMPLAYERS"`
+		MaxPlayers       int    `rcon:"MAXPLAYERS"`
+		VehicleLimit     int    `rcon:"VEHICLELIMIT"`
+		MineLimit        int    `rcon:"MINELIMIT"`
+		TimeLimit        int    `rcon:"TIMELIMIT"`
+		RequiresPassword bool   `rcon:"REQUIRESPASSWORD"`
+		RequiresSteam    bool   `rcon:"BSTEAMREQUIRED"`
+		IsListed         bool   `rcon:"BLISTED"`
+		GameVersion      string `rcon:"GAMEVERSION"`
+		GameMode         string `rcon:"MODE"`
+		InProgress       bool   `rcon:"MATCHINPROGRESS"`
+		GameState        string `rcon:"GAMESTATE"`
+
+		LastUpdated time.Time
+	}
+
+	PlayerBase struct {
+		ID     int    `rcon:"ID"`
+		Team   string `rcon:"TEAM"`
+		Name   string `rcon:"NAME"`
+		Score  int    `rcon:"SCORE"`
+		Deaths int    `rcon:"DEATHS"`
+		IsSpy  bool   `rcon:"SPY"`
+
+		LastUpdated time.Time
+	}
+
+	Bot struct {
+		PlayerBase
+	}
+)

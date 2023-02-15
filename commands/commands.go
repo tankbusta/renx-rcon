@@ -10,10 +10,13 @@ import (
 	"github.com/tankbusta/renx-rcon/state"
 )
 
+type HandleCommandResp func(cmd ICommand, resp string)
+
 type ICommand interface {
 	Command() string
-	MarshalRCON() string
+	MarshalRCON() []byte
 	UnmarshalRCON(msg string, v any) error
+	SkipFirstMsg() bool
 }
 
 var (
@@ -23,12 +26,20 @@ var (
 
 type ListBotsCommand struct{}
 
+func NewListBotsCommand() ListBotsCommand {
+	return ListBotsCommand{}
+}
+
+func (s ListBotsCommand) SkipFirstMsg() bool {
+	return true
+}
+
 func (s ListBotsCommand) Command() string {
 	return "BotVarList"
 }
 
-func (s ListBotsCommand) MarshalRCON() string {
-	return s.Command() + " " + strings.Join(botFields, events.Delimiter) + "\n"
+func (s ListBotsCommand) MarshalRCON() []byte {
+	return []byte("c" + s.Command() + " " + strings.Join(botFields, " ") + "\n")
 }
 
 func (s ListBotsCommand) UnmarshalRCON(msg string, v any) error {
@@ -40,14 +51,15 @@ func (s ListBotsCommand) UnmarshalRCON(msg string, v any) error {
 		)
 	}
 
-	parts := strings.Split(msg, events.Delimiter)
+	parts := strings.Split(msg, string(events.Delimiter))
 	if len(parts) != numBotFields {
 		return fmt.Errorf(
 			"unexpected number of fields in ListBotsCommand. expected %d got %d",
 			numBotFields, len(parts),
 		)
 	}
-	_ = parts[numBotFields] // Bounds check elimination
+
+	_ = parts[numBotFields-1] // Bounds check elimination
 
 	playerID, err := strconv.Atoi(parts[0])
 	if err != nil {

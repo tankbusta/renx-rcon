@@ -3,12 +3,12 @@ package rcon
 import (
 	"bufio"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"log"
 	"net"
 	"time"
 
+	"github.com/tankbusta/renx-rcon/commands"
 	"github.com/tankbusta/renx-rcon/events"
 	"github.com/tankbusta/renx-rcon/games"
 )
@@ -37,16 +37,15 @@ type Server struct {
 	GameState *GameStateManager
 
 	// unexported fields below
-	rconPassword  string
-	pendingWrites chan string
+	cmdWriter    *commands.Dispatcher
+	rconPassword string
 }
 
 func NewServer(rconPassword, gameServer string) *Server {
-	writes := make(chan string, WriterSizeQueue)
 	return &Server{
-		Address:       gameServer,
-		rconPassword:  rconPassword,
-		pendingWrites: writes,
+		Address:      gameServer,
+		cmdWriter:    commands.NewDispatcher(),
+		rconPassword: rconPassword,
 	}
 }
 
@@ -79,12 +78,10 @@ func (s *Server) Destroy() {
 	s.IsConnected = false
 	s.IsAuthenticated = false
 
-	close(s.pendingWrites)
-	s.pendingWrites = nil
 }
 
-func (s *Server) WriteMsg(msg string) {
-	s.pendingWrites <- msg
+func (s *Server) WriteMsg(msg commands.ICommand, cb commands.HandleCommandResp) {
+	s.cmdWriter.Enqueue(msg, cb)
 }
 
 func (s *Server) Start(ctx context.Context) error {
@@ -116,16 +113,19 @@ MainLoop:
 					select {
 					case <-ctx.Done():
 						break MainLoop
+					default:
+					}
+
 					// Design Note: Writes to RCON are so in-frequent here
 					// we're going to use the same loop for both reading and writing
-					case writeMe := <-s.pendingWrites:
-						log.Printf("[ !! ] Writing message to rcon: %s\n", writeMe)
+					if cmd := s.cmdWriter.Next(); cmd != nil {
+						msg := cmd.MarshalRCON()
+						log.Printf("[ !! ] Writing message to rcon: %s\n", msg)
+
 						conn.SetWriteDeadline(time.Now().Add(time.Second * 2))
-						if _, err := conn.Write([]byte(writeMe)); err != nil {
+						if _, err := conn.Write(msg); err != nil {
 							log.Printf("Failed to write to RCON msg at %s: %s", s.Address, err)
 						}
-						// TODO: We could put it back in the channel if it fails?
-					default:
 					}
 
 					conn.SetReadDeadline(time.Now().Add(time.Second * 1))
@@ -135,12 +135,12 @@ MainLoop:
 							continue ReadLoop // Keep going
 						}
 
-						log.Printf("Failed to read RCON msg: %s\n", err)
+						log.Printf("Failed to read RCON msg: %s", err)
 						break ReadLoop
 					}
 
 					if len(msg) < 2 {
-						log.Printf("RCON msg length of %d too small\n", len(msg))
+						log.Printf("RCON msg length of %d too small", len(msg))
 						break ReadLoop
 					}
 
@@ -185,13 +185,14 @@ MainLoop:
 
 						// Otherwise, just log the error
 						log.Printf("[ XX ] RCON error: %s\n", err)
+						s.cmdWriter.CommandDone()
 					case events.CommandResponse:
-						fmt.Println(hex.Dump([]byte(msgNoType)))
-						fallthrough
+						// log.Printf("[ !! ] Command Response: %s", msgNoType)
+						s.cmdWriter.OnMsg(msgNoType)
 					case events.CommandExecutionFinished:
-						fallthrough
+						log.Printf("[ !! ] Command Done\n")
+						s.cmdWriter.CommandDone()
 					case events.GameLog:
-						fallthrough
 					case events.ServerDevBot:
 						fmt.Println(msg)
 					}
