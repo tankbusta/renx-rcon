@@ -8,6 +8,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/tankbusta/renx-rcon/commands"
 	"github.com/tankbusta/renx-rcon/events"
 	"github.com/tankbusta/renx-rcon/games"
 )
@@ -33,17 +34,18 @@ type Server struct {
 	// IsConnected marks if the server has been connected to (but not necessairly authenticated)
 	IsConnected bool
 
+	GameState *GameStateManager
+
 	// unexported fields below
-	rconPassword  string
-	pendingWrites chan string
+	cmdWriter    *commands.Dispatcher
+	rconPassword string
 }
 
 func NewServer(rconPassword, gameServer string) *Server {
 	return &Server{
-		Address:         gameServer,
-		IsAuthenticated: false,
-		rconPassword:    rconPassword,
-		pendingWrites:   make(chan string, WriterSizeQueue),
+		Address:      gameServer,
+		cmdWriter:    commands.NewDispatcher(),
+		rconPassword: rconPassword,
 	}
 }
 
@@ -56,11 +58,11 @@ func (s *Server) Connect(ctx context.Context) (net.Conn, error) {
 
 	conn, err := d.DialContext(ctx, "tcp", s.Address)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to connect to RCON at %s: %w", s.Address, err)
+		return nil, fmt.Errorf("failed to connect to RCON at %s: %w", s.Address, err)
 	}
 
 	if _, err := conn.Write([]byte(fmt.Sprintf("a%s\n", s.rconPassword))); err != nil {
-		return nil, fmt.Errorf("Failed to authenticate to RCON at %s: %w", s.Address, err)
+		return nil, fmt.Errorf("failed to authenticate to RCON at %s: %w", s.Address, err)
 	}
 
 	s.IsConnected = true
@@ -76,11 +78,19 @@ func (s *Server) Destroy() {
 	s.IsConnected = false
 	s.IsAuthenticated = false
 
-	close(s.pendingWrites)
-	s.pendingWrites = nil
+}
+
+func (s *Server) WriteMsg(msg commands.ICommand, cb commands.HandleCommandResp) {
+	s.cmdWriter.Enqueue(msg, cb)
 }
 
 func (s *Server) Start(ctx context.Context) error {
+	state := NewGameState(s)
+
+	go func() {
+		state.Start(ctx)
+	}()
+
 MainLoop:
 	for {
 		select {
@@ -103,15 +113,19 @@ MainLoop:
 					select {
 					case <-ctx.Done():
 						break MainLoop
+					default:
+					}
+
 					// Design Note: Writes to RCON are so in-frequent here
 					// we're going to use the same loop for both reading and writing
-					case writeMe := <-s.pendingWrites:
+					if cmd := s.cmdWriter.Next(); cmd != nil {
+						msg := cmd.MarshalRCON()
+						log.Printf("[ !! ] Writing message to rcon: %s\n", msg)
+
 						conn.SetWriteDeadline(time.Now().Add(time.Second * 2))
-						if _, err := conn.Write([]byte(writeMe)); err != nil {
+						if _, err := conn.Write(msg); err != nil {
 							log.Printf("Failed to write to RCON msg at %s: %s", s.Address, err)
 						}
-						// TODO: We could put it back in the channel if it fails?
-					default:
 					}
 
 					conn.SetReadDeadline(time.Now().Add(time.Second * 1))
@@ -121,16 +135,16 @@ MainLoop:
 							continue ReadLoop // Keep going
 						}
 
-						log.Printf("Failed to read RCON msg: %s\n", err)
+						log.Printf("Failed to read RCON msg: %s", err)
 						break ReadLoop
 					}
 
-					if len(msg) < 4 {
-						log.Printf("RCON msg length of %d too small\n", len(msg))
+					if len(msg) < 2 {
+						log.Printf("RCON msg length of %d too small", len(msg))
 						break ReadLoop
 					}
 
-					_ = msg[3] // Bounds check
+					_ = msg[1] // Bounds check
 
 					msgNoType := msg[1:]
 					switch events.ServerType(msg[0]) {
@@ -171,12 +185,14 @@ MainLoop:
 
 						// Otherwise, just log the error
 						log.Printf("[ XX ] RCON error: %s\n", err)
+						s.cmdWriter.CommandDone()
 					case events.CommandResponse:
-						fallthrough
+						// log.Printf("[ !! ] Command Response: %s", msgNoType)
+						s.cmdWriter.OnMsg(msgNoType)
 					case events.CommandExecutionFinished:
-						fallthrough
+						log.Printf("[ !! ] Command Done\n")
+						s.cmdWriter.CommandDone()
 					case events.GameLog:
-						fallthrough
 					case events.ServerDevBot:
 						fmt.Println(msg)
 					}

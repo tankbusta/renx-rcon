@@ -21,7 +21,7 @@ type EventParser interface {
 
 const (
 	NewLine   = 0x0A // '\n'
-	Delimiter = string(0x02)
+	Delimiter = rune(0x02)
 )
 
 const (
